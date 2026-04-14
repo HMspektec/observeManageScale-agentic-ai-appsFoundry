@@ -1,16 +1,6 @@
 #!/bin/bash
 
-# ---------------------------------------------------------------------------------------------------------------------------------
-# Setup Script - Provisions infrastructure for the labs
-# - Clones the ForBeginners repository (if not already present)
-# - Creates and configures AZD environment
-# - Deploys Azure infrastructure using azd up
-#
-# Note: This script is for testing purposes only.
-#       In-venue labs use pre-provisioned Azure subscriptions with resources already deployed.
-# ---------------------------------------------------------------------------------------------------------------------------------
-
-set -e  # Exit on error during setup
+set -e
 
 # Color formatting
 RED='\033[0;31m'
@@ -18,7 +8,6 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
-# Configuration - was "msignite25-prel13"
 REPO_URL="https://github.com/microsoft/ForBeginners"
 DEFAULT_BRANCH="for-release-1.0.4" 
 TARGET_DIR="./ForBeginners"
@@ -34,7 +23,6 @@ clone_forbeginners_repo() {
         return 0
     fi
     
-    # Prompt for branch name
     echo -e "${YELLOW}Cloning ForBeginners repository...${NC}"
     read -p "Enter branch name [${DEFAULT_BRANCH}]: " branch_input
     local branch=${branch_input:-$DEFAULT_BRANCH}
@@ -43,7 +31,7 @@ clone_forbeginners_repo() {
     if git clone -b "$branch" --single-branch "$REPO_URL" "$TARGET_DIR"; then
         echo -e "${GREEN}✓ Repository cloned successfully from branch: ${branch}${NC}"
     else
-        echo -e "${RED}✗ Failed to clone repository from branch: ${branch}${NC}"
+        echo -e "${RED}✗ Failed to clone repository${NC}"
         exit 1
     fi
 }
@@ -51,10 +39,8 @@ clone_forbeginners_repo() {
 setup_azd_environment() {
     echo -e "${YELLOW}Setting up AZD environment...${NC}"
     
-    # Check if an environment already exists
     local existing_env=$(azd env list --output json 2>/dev/null | jq -r '.[0].Name' 2>/dev/null || echo "")
     
-    # Validate we have a real environment (not empty and not "null")
     if [ -n "$existing_env" ] && [ "$existing_env" != "null" ]; then
         echo -e "${YELLOW}Found existing AZD environment: ${existing_env}${NC}"
         read -p "Use existing environment? (yes/no): " use_existing
@@ -71,26 +57,23 @@ setup_azd_environment() {
 create_new_environment() {
     echo -e "${YELLOW}Creating new AZD environment...${NC}"
     
-    # Prompt for environment details
     read -p "Enter environment name: " env_name
     read -p "Enter Azure region [swedencentral]: " region
     region=${region:-swedencentral}
     read -p "Enter subscription ID (optional): " subscription_id
     
-    # Create environment
     if [ -n "$subscription_id" ]; then
         azd env new "$env_name" --location "$region" --subscription "$subscription_id"
     else
         azd env new "$env_name" --location "$region"
     fi
     
-    echo -e "${GREEN}✓ Environment created: ${env_name}${NC}"
+    echo -e "${GREEN}✓ Environment created${NC}"
 }
 
 configure_environment_variables() {
     echo -e "${YELLOW}Configuring environment variables...${NC}"
     
-    # Set required environment variables for the deployment
     azd env set USE_APPLICATION_INSIGHTS true
     azd env set ENABLE_AZURE_MONITOR_TRACING true
     azd env set AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED true
@@ -108,60 +91,20 @@ configure_azure_ai_search() {
     echo -e "${YELLOW}  Azure AI Search Configuration${NC}"
     echo -e "${YELLOW}======================================${NC}"
     echo ""
-    echo -e "${YELLOW}Azure AI Search enables RAG (Retrieval Augmented Generation) by searching${NC}"
-    echo -e "${YELLOW}through indexed documents to provide context for better AI responses.${NC}"
-    echo ""
-    echo -e "${RED}⚠️  IMPORTANT: Search must be configured BEFORE initial deployment!${NC}"
-    echo ""
-    
+
     read -p "Do you want to activate Azure AI Search? (yes/no) [no]: " enable_search
     enable_search=${enable_search:-no}
     
     if [ "$enable_search" == "yes" ]; then
-        echo ""
-        echo -e "${YELLOW}Configuring Azure AI Search with defaults:${NC}"
-        echo -e "  - Index Name: zava-products"
-        echo -e "  - Embedding Model: text-embedding-3-large"
-        echo -e "  - Model Version: 1"
-        echo -e "  - SKU: Standard"
-        echo -e "  - Capacity: 50"
-        echo ""
         
-        read -p "Use these defaults? (yes/no) [yes]: " use_defaults
-        use_defaults=${use_defaults:-yes}
+        SEARCH_INDEX_NAME="zava-products"
+        EMBED_MODEL_NAME="text-embedding-3-large"
+        EMBED_MODEL_VERSION="1"
+        EMBED_MODEL_FORMAT="OpenAI"
+        EMBED_DEPLOYMENT_NAME="text-embedding-3-large"
+        EMBED_SKU_NAME="Standard"
+        EMBED_CAPACITY="50"
         
-        if [ "$use_defaults" == "yes" ]; then
-            SEARCH_INDEX_NAME="zava-products"
-            EMBED_MODEL_NAME="text-embedding-3-large"
-            EMBED_MODEL_VERSION="1"
-            EMBED_MODEL_FORMAT="OpenAI"
-            EMBED_DEPLOYMENT_NAME="text-embedding-3-large"
-            EMBED_SKU_NAME="Standard"
-            EMBED_CAPACITY="50"
-        else
-            read -p "Enter search index name [zava-products]: " index_input
-            SEARCH_INDEX_NAME=${index_input:-zava-products}
-            
-            read -p "Enter embedding model name [text-embedding-3-large]: " model_input
-            EMBED_MODEL_NAME=${model_input:-text-embedding-3-large}
-            
-            read -p "Enter model version [1]: " version_input
-            EMBED_MODEL_VERSION=${version_input:-1}
-            
-            read -p "Enter model format [OpenAI]: " format_input
-            EMBED_MODEL_FORMAT=${format_input:-OpenAI}
-            
-            read -p "Enter deployment name [text-embedding-3-large]: " deploy_input
-            EMBED_DEPLOYMENT_NAME=${deploy_input:-text-embedding-3-large}
-            
-            read -p "Enter SKU name [Standard]: " sku_input
-            EMBED_SKU_NAME=${sku_input:-Standard}
-            
-            read -p "Enter capacity [50]: " capacity_input
-            EMBED_CAPACITY=${capacity_input:-50}
-        fi
-        
-        # Set environment variables for Azure AI Search
         azd env set USE_AZURE_AI_SEARCH_SERVICE true
         azd env set AZURE_AI_SEARCH_INDEX_NAME "$SEARCH_INDEX_NAME"
         azd env set AZURE_AI_EMBED_DEPLOYMENT_NAME "$EMBED_DEPLOYMENT_NAME"
@@ -171,37 +114,39 @@ configure_azure_ai_search() {
         azd env set AZURE_AI_EMBED_DEPLOYMENT_SKU "$EMBED_SKU_NAME"
         azd env set AZURE_AI_EMBED_DEPLOYMENT_CAPACITY "$EMBED_CAPACITY"
         
-        echo ""
         echo -e "${GREEN}✓ Azure AI Search configured${NC}"
-        echo -e "${GREEN}  - Search Service: Enabled${NC}"
-        echo -e "${GREEN}  - Index Name: $SEARCH_INDEX_NAME${NC}"
-        echo -e "${GREEN}  - Embedding Model: $EMBED_MODEL_NAME (version: $EMBED_MODEL_VERSION)${NC}"
-        echo ""
     else
-        echo -e "${YELLOW}Azure AI Search will not be enabled${NC}"
         azd env set USE_AZURE_AI_SEARCH_SERVICE false
     fi
 }
 
+#==============================================================================
+# ✅ MODIFIED STEP 5 (USE EXISTING RESOURCES)
+#==============================================================================
+
 deploy_infrastructure() {
     echo -e "${YELLOW}======================================${NC}"
-    echo -e "${YELLOW}Ready to deploy Azure infrastructure${NC}"
+    echo -e "${YELLOW}Using existing Azure resources${NC}"
     echo -e "${YELLOW}======================================${NC}"
-    
-    read -p "Proceed with deployment? (yes/no): " confirm
-    
-    if [ "$confirm" != "yes" ]; then
-        echo -e "${YELLOW}Deployment cancelled${NC}"
-        exit 0
+
+    read -p "Enter existing Resource Group name: " EXISTING_RG
+    read -p "Enter Azure OpenAI service name: " EXISTING_OPENAI
+    read -p "Enter Storage Account name: " EXISTING_STORAGE
+    read -p "Enter Azure AI Search service name (optional): " EXISTING_SEARCH
+
+    echo -e "${YELLOW}Configuring environment...${NC}"
+
+    azd env set AZURE_RESOURCE_GROUP "$EXISTING_RG"
+    azd env set AZURE_OPENAI_NAME "$EXISTING_OPENAI"
+    azd env set AZURE_STORAGE_ACCOUNT "$EXISTING_STORAGE"
+
+    if [ -n "$EXISTING_SEARCH" ]; then
+        azd env set AZURE_AI_SEARCH_NAME "$EXISTING_SEARCH"
+        azd env set USE_AZURE_AI_SEARCH_SERVICE true
     fi
-    
-    echo -e "${YELLOW}Running azd up...${NC}"
-    if azd up --no-prompt; then
-        echo -e "${GREEN}✓ Infrastructure deployed successfully${NC}"
-    else
-        echo -e "${RED}✗ Deployment failed${NC}"
-        exit 1
-    fi
+
+    echo -e "${GREEN}✓ Existing resources configured${NC}"
+    echo -e "${GREEN}✓ Skipped infrastructure deployment${NC}"
 }
 
 #==============================================================================
@@ -210,46 +155,19 @@ deploy_infrastructure() {
 
 echo -e "${YELLOW}Starting setup process...${NC}"
 
-# Clone the ForBeginners repository
 clone_forbeginners_repo
 
-# Navigate to the AZD setup directory
 if [ ! -d "$AZD_SETUP_DIR" ]; then
-    echo -e "${RED}✗ AZD setup directory not found: ${AZD_SETUP_DIR}${NC}"
+    echo -e "${RED}✗ AZD setup directory not found${NC}"
     exit 1
 fi
 
 cd "$AZD_SETUP_DIR"
-echo -e "${GREEN}Changed to AZD setup directory${NC}"
 
-# Setup AZD environment
 setup_azd_environment
-
-# Configure environment variables
 configure_environment_variables
-
-# Configure Azure AI Search (optional)
 configure_azure_ai_search
-
-# Deploy infrastructure
 deploy_infrastructure
 
-# Summary
 echo ""
-echo -e "${YELLOW}======================================${NC}"
 echo -e "${GREEN}Setup Complete!${NC}"
-echo -e "${YELLOW}======================================${NC}"
-echo -e "${GREEN}✓ Repository cloned${NC}"
-echo -e "${GREEN}✓ Environment configured${NC}"
-echo -e "${GREEN}✓ Infrastructure deployed${NC}"
-
-# Check if search was enabled
-search_enabled=$(azd env get-value USE_AZURE_AI_SEARCH_SERVICE 2>/dev/null || echo "false")
-if [ "$search_enabled" == "true" ]; then
-    search_index=$(azd env get-value AZURE_AI_SEARCH_INDEX_NAME 2>/dev/null || echo "N/A")
-    echo -e "${GREEN}✓ Azure AI Search enabled (Index: $search_index)${NC}"
-else
-    echo -e "${YELLOW}ℹ️  Azure AI Search not enabled${NC}"
-fi
-
-echo -e "${YELLOW}======================================${NC}"
