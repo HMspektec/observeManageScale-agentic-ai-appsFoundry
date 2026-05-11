@@ -1,10 +1,10 @@
 #!/bin/bash
 # ============================================================================
-# Script: 1-get-env-selfguided.sh
+# Script: 1-update-env-selfguided.sh
 # Description: Interactive script to recreate .env file from Azure resources
 #              Prompts for Azure login, auto-discovers rg-Ignite* resource groups,
 #              and allows user to override the selection
-# Usage: ./scripts/1-get-env-selfguided.sh
+# Usage: ./scripts/1-update-env-selfguided.sh
 # ============================================================================
 
 set -e
@@ -21,6 +21,16 @@ NC='\033[0m'
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKSPACE_ROOT="$(dirname "$SCRIPT_DIR")"
 ENV_FILE="$WORKSPACE_ROOT/.env"
+
+# Load existing .env values as fallbacks before overwriting anything.
+# This ensures a re-run preserves previously discovered values for resources
+# that can't be found in the current session (e.g. not yet deployed).
+if [ -f "$ENV_FILE" ]; then
+    set -a
+    # shellcheck disable=SC1090
+    source "$ENV_FILE" 2>/dev/null || true
+    set +a
+fi
 
 echo -e "${BLUE}════════════════════════════════════════════════════════════════${NC}"
 echo -e "${BOLD}${CYAN}    Azure Environment Setup - Self-Guided${NC}"
@@ -78,7 +88,7 @@ echo -e "${YELLOW}Step 3: Discovering resource groups...${NC}"
 echo -e "${CYAN}Searching for resource groups with 'rg-Ignite' prefix...${NC}"
 
 IGNITE_RGS=$(az group list --query "[?starts_with(name, 'rg-Ignite')].{name:name, location:location}" -o json 2>/dev/null || echo "[]")
-IGNITE_RG_COUNT=$(echo "$IGNITE_RGS" | jq length)
+IGNITE_RG_COUNT=$(echo "$IGNITE_RGS" | jq length 2>/dev/null || echo "0")
 
 DEFAULT_RG=""
 DEFAULT_LOCATION=""
@@ -89,16 +99,16 @@ if [ "$IGNITE_RG_COUNT" -eq 0 ]; then
     az group list --query "[].{name:name, location:location}" -o table
     echo ""
 elif [ "$IGNITE_RG_COUNT" -eq 1 ]; then
-    DEFAULT_RG=$(echo "$IGNITE_RGS" | jq -r '.[0].name')
-    DEFAULT_LOCATION=$(echo "$IGNITE_RGS" | jq -r '.[0].location')
+    DEFAULT_RG=$(echo "$IGNITE_RGS" | jq -r '.[0].name' 2>/dev/null || echo "")
+    DEFAULT_LOCATION=$(echo "$IGNITE_RGS" | jq -r '.[0].location' 2>/dev/null || echo "")
     echo -e "${GREEN}✓ Found 1 resource group with 'rg-Ignite' prefix:${NC}"
     echo -e "  ${BOLD}→ $DEFAULT_RG${NC} (${DEFAULT_LOCATION})\n"
 else
     echo -e "${GREEN}✓ Found $IGNITE_RG_COUNT resource groups with 'rg-Ignite' prefix:${NC}"
-    echo "$IGNITE_RGS" | jq -r '.[] | "  • \(.name) (\(.location))"'
+    echo "$IGNITE_RGS" | jq -r '.[] | "  • \(.name) (\(.location))"' 2>/dev/null || true
     echo ""
-    DEFAULT_RG=$(echo "$IGNITE_RGS" | jq -r '.[0].name')
-    DEFAULT_LOCATION=$(echo "$IGNITE_RGS" | jq -r '.[0].location')
+    DEFAULT_RG=$(echo "$IGNITE_RGS" | jq -r '.[0].name' 2>/dev/null || echo "")
+    DEFAULT_LOCATION=$(echo "$IGNITE_RGS" | jq -r '.[0].location' 2>/dev/null || echo "")
     echo -e "${CYAN}Default selection:${NC} ${BOLD}$DEFAULT_RG${NC}\n"
 fi
 
@@ -118,11 +128,11 @@ elif [ -n "$USER_INPUT_RG" ]; then
     AZURE_RESOURCE_GROUP="$USER_INPUT_RG"
     # Get location for the specified resource group
     RG_INFO=$(az group show --name "$AZURE_RESOURCE_GROUP" --query "{name:name, location:location}" -o json 2>/dev/null || echo "{}")
-    if [ "$(echo "$RG_INFO" | jq -r '.name')" == "null" ]; then
+    if [ "$(echo "$RG_INFO" | jq -r '.name' 2>/dev/null || echo "null")" == "null" ]; then
         echo -e "${RED}✗ Resource group '$AZURE_RESOURCE_GROUP' not found${NC}"
         exit 1
     fi
-    AZURE_LOCATION=$(echo "$RG_INFO" | jq -r '.location')
+    AZURE_LOCATION=$(echo "$RG_INFO" | jq -r '.location' 2>/dev/null || echo "")
     echo -e "${GREEN}Using: $AZURE_RESOURCE_GROUP ($AZURE_LOCATION)${NC}\n"
 else
     echo -e "${RED}✗ No resource group specified${NC}"
@@ -135,7 +145,7 @@ fi
 echo -e "${YELLOW}Step 4: Discovering resources in $AZURE_RESOURCE_GROUP...${NC}"
 
 ALL_RESOURCES=$(az resource list --resource-group "$AZURE_RESOURCE_GROUP" --query "[].{name:name, type:type}" -o json 2>/dev/null || echo "[]")
-RESOURCE_COUNT=$(echo "$ALL_RESOURCES" | jq length)
+RESOURCE_COUNT=$(echo "$ALL_RESOURCES" | jq length 2>/dev/null || echo "0")
 
 if [ "$RESOURCE_COUNT" -eq 0 ]; then
     echo -e "${RED}✗ No resources found in resource group '$AZURE_RESOURCE_GROUP'${NC}"
@@ -144,7 +154,7 @@ fi
 
 echo -e "${GREEN}✓ Found $RESOURCE_COUNT resources${NC}"
 echo -e "${CYAN}Resource types:${NC}"
-echo "$ALL_RESOURCES" | jq -r '[.[] | .type] | unique | .[]' | sort | sed 's/^/  • /'
+echo "$ALL_RESOURCES" | jq -r '[.[] | .type] | unique | .[]' 2>/dev/null | sort | sed 's/^/  • /' || echo "  • Unable to retrieve resource types"
 echo ""
 
 # ============================================================================
@@ -161,8 +171,8 @@ AOAI_RESOURCES=$(az resource list \
 AOAI_COUNT=$(echo "$AOAI_RESOURCES" | jq length 2>/dev/null || echo "0")
 
 if [ "$AOAI_COUNT" -gt 0 ]; then
-    AOAI_NAME=$(echo "$AOAI_RESOURCES" | jq -r '.[0].name')
-    AOAI_KIND=$(echo "$AOAI_RESOURCES" | jq -r '.[0].kind')
+    AOAI_NAME=$(echo "$AOAI_RESOURCES" | jq -r '.[0].name' 2>/dev/null || echo "")
+    AOAI_KIND=$(echo "$AOAI_RESOURCES" | jq -r '.[0].kind' 2>/dev/null || echo "")
     
     # Construct the OpenAI endpoint using the OpenAI format
     # The OpenAI format is: https://{resource-name}.openai.azure.com/
@@ -191,24 +201,41 @@ if [ "$AOAI_COUNT" -gt 0 ]; then
         --query "[].{name:name, model:properties.model.name, version:properties.model.version, capacity:sku.capacity}" \
         -o json 2>/dev/null || echo "[]")
     
-    DEPLOYMENT_COUNT=$(echo "$DEPLOYMENTS" | jq length)
+    DEPLOYMENT_COUNT=$(echo "$DEPLOYMENTS" | jq length 2>/dev/null || echo "0")
+
+    # Fallback for AIServices kind: older CLI versions (< 2.40) may return 0 deployments
+    # via cognitiveservices command. Call the ARM REST API directly as a fallback.
+    if [ "$DEPLOYMENT_COUNT" -eq 0 ] && [ "$AOAI_KIND" = "AIServices" ]; then
+        echo -e "  ${CYAN}No deployments via CLI - retrying via REST API...${NC}"
+        DEPLOYMENTS=$(az rest \
+            --method GET \
+            --uri "https://management.azure.com/subscriptions/$AZURE_SUBSCRIPTION_ID/resourceGroups/$AZURE_RESOURCE_GROUP/providers/Microsoft.CognitiveServices/accounts/$AOAI_NAME/deployments?api-version=2024-10-01" \
+            -o json 2>/dev/null | jq '[.value[] | {name:.name, model:.properties.model.name, version:.properties.model.version, capacity:.sku.capacity}]' 2>/dev/null || echo "[]")
+        DEPLOYMENT_COUNT=$(echo "$DEPLOYMENTS" | jq length 2>/dev/null || echo "0")
+    fi
+
     echo -e "  ${BOLD}Deployments:${NC} $DEPLOYMENT_COUNT found"
-    
+
     if [ "$DEPLOYMENT_COUNT" -gt 0 ]; then
-        echo "$DEPLOYMENTS" | jq -r '.[] | "    - \(.name) (\(.model) v\(.version))"'
+        echo "$DEPLOYMENTS" | jq -r '.[] | "    - \(.name) (\((.model // "unknown")) v\((.version // "unknown")))"' 2>/dev/null || true
     fi
     
     # Identify agent deployment (GPT-4)
-    AZURE_AI_AGENT_DEPLOYMENT_NAME=$(echo "$DEPLOYMENTS" | jq -r '[.[] | select(.model | test("gpt-4"; "i"))] | .[0].name // ""')
-    AZURE_AI_AGENT_MODEL_NAME=$(echo "$DEPLOYMENTS" | jq -r '[.[] | select(.model | test("gpt-4"; "i"))] | .[0].model // "gpt-4"')
-    AZURE_AI_AGENT_MODEL_VERSION=$(echo "$DEPLOYMENTS" | jq -r '[.[] | select(.model | test("gpt-4"; "i"))] | .[0].version // "2024-05-13"')
-    AZURE_AI_AGENT_DEPLOYMENT_CAPACITY=$(echo "$DEPLOYMENTS" | jq -r '[.[] | select(.model | test("gpt-4"; "i"))] | .[0].capacity // "10"')
+    # Use (.model // "") to guard against null model fields which crash test()
+    AZURE_AI_AGENT_DEPLOYMENT_NAME=$(echo "$DEPLOYMENTS" | jq -r '[.[] | select((.model // "") | test("gpt-4"; "i"))] | .[0].name // ""' 2>/dev/null || echo "")
+    AZURE_AI_AGENT_MODEL_NAME=$(echo "$DEPLOYMENTS" | jq -r '[.[] | select((.model // "") | test("gpt-4"; "i"))] | .[0].model // "gpt-4"' 2>/dev/null || echo "gpt-4")
+    AZURE_AI_AGENT_MODEL_VERSION=$(echo "$DEPLOYMENTS" | jq -r '[.[] | select((.model // "") | test("gpt-4"; "i"))] | .[0].version // "2024-05-13"' 2>/dev/null || echo "2024-05-13")
+    AZURE_AI_AGENT_DEPLOYMENT_CAPACITY=$(echo "$DEPLOYMENTS" | jq -r '[.[] | select((.model // "") | test("gpt-4"; "i"))] | .[0].capacity // "10"' 2>/dev/null || echo "10")
     
-    # Identify embedding deployment
-    AZURE_AI_EMBED_DEPLOYMENT_NAME=$(echo "$DEPLOYMENTS" | jq -r '[.[] | select(.model | test("embedding|embed"; "i"))] | .[0].name // ""')
-    AZURE_AI_EMBED_MODEL_NAME=$(echo "$DEPLOYMENTS" | jq -r '[.[] | select(.model | test("embedding|embed"; "i"))] | .[0].model // "text-embedding-3-large"')
-    AZURE_AI_EMBED_MODEL_VERSION=$(echo "$DEPLOYMENTS" | jq -r '[.[] | select(.model | test("embedding|embed"; "i"))] | .[0].version // "2"')
-    AZURE_AI_EMBED_DEPLOYMENT_CAPACITY=$(echo "$DEPLOYMENTS" | jq -r '[.[] | select(.model | test("embedding|embed"; "i"))] | .[0].capacity // "10"')
+    # Identify embedding deployment - prefer text-embedding-3-large
+    AZURE_AI_EMBED_DEPLOYMENT_NAME=$(echo "$DEPLOYMENTS" | jq -r '[.[] | select((.model // "") | test("text-embedding-3-large"; "i"))] | .[0].name // ""' 2>/dev/null || echo "")
+    if [ -z "$AZURE_AI_EMBED_DEPLOYMENT_NAME" ]; then
+        # Fallback to any embedding model
+        AZURE_AI_EMBED_DEPLOYMENT_NAME=$(echo "$DEPLOYMENTS" | jq -r '[.[] | select((.model // "") | test("embedding|embed"; "i"))] | .[0].name // ""' 2>/dev/null || echo "")
+    fi
+    AZURE_AI_EMBED_MODEL_NAME=$(echo "$DEPLOYMENTS" | jq -r '[.[] | select(.name == "'"$AZURE_AI_EMBED_DEPLOYMENT_NAME"'")] | .[0].model // "text-embedding-3-large"' 2>/dev/null || echo "text-embedding-3-large")
+    AZURE_AI_EMBED_MODEL_VERSION=$(echo "$DEPLOYMENTS" | jq -r '[.[] | select(.name == "'"$AZURE_AI_EMBED_DEPLOYMENT_NAME"'")] | .[0].version // "2"' 2>/dev/null || echo "2")
+    AZURE_AI_EMBED_DEPLOYMENT_CAPACITY=$(echo "$DEPLOYMENTS" | jq -r '[.[] | select(.name == "'"$AZURE_AI_EMBED_DEPLOYMENT_NAME"'")] | .[0].capacity // "10"' 2>/dev/null || echo "10")
     
     if [ -n "$AZURE_AI_AGENT_DEPLOYMENT_NAME" ]; then
         echo -e "  ${BOLD}Agent Model:${NC} $AZURE_AI_AGENT_DEPLOYMENT_NAME ($AZURE_AI_AGENT_MODEL_NAME)"
@@ -218,18 +245,18 @@ if [ "$AOAI_COUNT" -gt 0 ]; then
         echo -e "  ${BOLD}Embedding Model:${NC} $AZURE_AI_EMBED_DEPLOYMENT_NAME ($AZURE_AI_EMBED_MODEL_NAME)"
     fi
 else
-    echo -e "${YELLOW}⚠ No Azure OpenAI resources found${NC}"
-    AOAI_NAME=""
-    AZURE_OPENAI_ENDPOINT=""
-    AZURE_OPENAI_API_KEY=""
-    AZURE_AI_AGENT_DEPLOYMENT_NAME="gpt-4"
-    AZURE_AI_AGENT_MODEL_NAME="gpt-4"
-    AZURE_AI_AGENT_MODEL_VERSION="2024-05-13"
-    AZURE_AI_AGENT_DEPLOYMENT_CAPACITY="10"
-    AZURE_AI_EMBED_DEPLOYMENT_NAME="text-embedding-3-large"
-    AZURE_AI_EMBED_MODEL_NAME="text-embedding-3-large"
-    AZURE_AI_EMBED_MODEL_VERSION="2"
-    AZURE_AI_EMBED_DEPLOYMENT_CAPACITY="10"
+    echo -e "${YELLOW}⚠ No Azure OpenAI resources found - preserving any existing values${NC}"
+    AOAI_NAME="${AZURE_AI_FOUNDRY_NAME:-}"
+    AZURE_OPENAI_ENDPOINT="${AZURE_OPENAI_ENDPOINT:-}"
+    AZURE_OPENAI_API_KEY="${AZURE_OPENAI_API_KEY:-}"
+    AZURE_AI_AGENT_DEPLOYMENT_NAME="${AZURE_AI_AGENT_DEPLOYMENT_NAME:-gpt-4}"
+    AZURE_AI_AGENT_MODEL_NAME="${AZURE_AI_AGENT_MODEL_NAME:-gpt-4}"
+    AZURE_AI_AGENT_MODEL_VERSION="${AZURE_AI_AGENT_MODEL_VERSION:-2024-05-13}"
+    AZURE_AI_AGENT_DEPLOYMENT_CAPACITY="${AZURE_AI_AGENT_DEPLOYMENT_CAPACITY:-10}"
+    AZURE_AI_EMBED_DEPLOYMENT_NAME="${AZURE_AI_EMBED_DEPLOYMENT_NAME:-text-embedding-3-large}"
+    AZURE_AI_EMBED_MODEL_NAME="${AZURE_AI_EMBED_MODEL_NAME:-text-embedding-3-large}"
+    AZURE_AI_EMBED_MODEL_VERSION="${AZURE_AI_EMBED_MODEL_VERSION:-2}"
+    AZURE_AI_EMBED_DEPLOYMENT_CAPACITY="${AZURE_AI_EMBED_DEPLOYMENT_CAPACITY:-10}"
 fi
 echo ""
 
@@ -243,10 +270,10 @@ SEARCH_SERVICES=$(az search service list \
     --query "[].{name:name}" \
     -o json 2>/dev/null || echo "[]")
 
-SEARCH_COUNT=$(echo "$SEARCH_SERVICES" | jq length)
+SEARCH_COUNT=$(echo "$SEARCH_SERVICES" | jq length 2>/dev/null || echo "0")
 
 if [ "$SEARCH_COUNT" -gt 0 ]; then
-    SEARCH_NAME=$(echo "$SEARCH_SERVICES" | jq -r '.[0].name')
+    SEARCH_NAME=$(echo "$SEARCH_SERVICES" | jq -r '.[0].name' 2>/dev/null || echo "")
     AZURE_AI_SEARCH_ENDPOINT="https://${SEARCH_NAME}.search.windows.net"
     
     echo -e "${GREEN}✓ Found Azure AI Search: $SEARCH_NAME${NC}"
@@ -271,21 +298,22 @@ if [ "$SEARCH_COUNT" -gt 0 ]; then
         -o tsv 2>/dev/null || echo "")
     
     if [ -n "$INDEXES" ]; then
-        INDEX_COUNT=$(echo "$INDEXES" | wc -l)
+        # Use grep -c to count non-empty lines reliably (wc -l doesn't handle final newline correctly)
+        INDEX_COUNT=$(echo "$INDEXES" | grep -c . || echo 0)
         AZURE_AI_SEARCH_INDEX_NAME=$(echo "$INDEXES" | head -n 1)
         echo -e "  ${BOLD}Indexes:${NC} $INDEX_COUNT found"
         echo "$INDEXES" | sed 's/^/    - /'
         echo -e "  ${BOLD}Using:${NC} $AZURE_AI_SEARCH_INDEX_NAME"
     else
-        AZURE_AI_SEARCH_INDEX_NAME="zava-products"
-        echo -e "  ${YELLOW}No indexes found, using default: $AZURE_AI_SEARCH_INDEX_NAME${NC}"
+        AZURE_AI_SEARCH_INDEX_NAME="${AZURE_SEARCH_INDEX_NAME:-zava-products}"
+        echo -e "  ${YELLOW}No indexes found, using existing/default: $AZURE_AI_SEARCH_INDEX_NAME${NC}"
     fi
 else
-    echo -e "${YELLOW}⚠ No Azure AI Search resources found${NC}"
+    echo -e "${YELLOW}⚠ No Azure AI Search resources found - preserving any existing values${NC}"
     SEARCH_NAME=""
-    AZURE_AI_SEARCH_ENDPOINT=""
-    AZURE_SEARCH_API_KEY=""
-    AZURE_AI_SEARCH_INDEX_NAME="zava-products"
+    AZURE_AI_SEARCH_ENDPOINT="${AZURE_SEARCH_ENDPOINT:-}"
+    AZURE_SEARCH_API_KEY="${AZURE_SEARCH_API_KEY:-}"
+    AZURE_AI_SEARCH_INDEX_NAME="${AZURE_SEARCH_INDEX_NAME:-zava-products}"
 fi
 echo ""
 
@@ -295,10 +323,10 @@ echo ""
 echo -e "${YELLOW}Step 7: Discovering AI Foundry Project...${NC}"
 
 if [ -z "$AOAI_NAME" ]; then
-    echo -e "${YELLOW}⚠ No AI Service found - skipping project search${NC}"
-    AZURE_AI_PROJECT_NAME=""
-    AZURE_EXISTING_AIPROJECT_RESOURCE_ID=""
-    AZURE_EXISTING_AIPROJECT_ENDPOINT=""
+    echo -e "${YELLOW}⚠ No AI Service found - preserving any existing project values${NC}"
+    AZURE_AI_PROJECT_NAME="${AZURE_AI_PROJECT_NAME:-}"
+    AZURE_EXISTING_AIPROJECT_RESOURCE_ID="${AZURE_EXISTING_AIPROJECT_RESOURCE_ID:-}"
+    AZURE_EXISTING_AIPROJECT_ENDPOINT="${AZURE_EXISTING_AIPROJECT_ENDPOINT:-}"
 else
     echo -e "${CYAN}Searching for AI Projects under AI Service: $AOAI_NAME${NC}"
     
@@ -322,10 +350,10 @@ else
     AI_PROJECT_COUNT=${#AI_PROJECTS[@]}
     
     if [ "$AI_PROJECT_COUNT" -eq 0 ]; then
-        echo -e "${YELLOW}⚠ No AI Foundry Projects found under $AOAI_NAME${NC}"
-        AZURE_AI_PROJECT_NAME=""
-        AZURE_EXISTING_AIPROJECT_RESOURCE_ID=""
-        AZURE_EXISTING_AIPROJECT_ENDPOINT=""
+        echo -e "${YELLOW}⚠ No AI Foundry Projects found under $AOAI_NAME - preserving any existing values${NC}"
+        AZURE_AI_PROJECT_NAME="${AZURE_AI_PROJECT_NAME:-}"
+        AZURE_EXISTING_AIPROJECT_RESOURCE_ID="${AZURE_EXISTING_AIPROJECT_RESOURCE_ID:-}"
+        AZURE_EXISTING_AIPROJECT_ENDPOINT="${AZURE_EXISTING_AIPROJECT_ENDPOINT:-}"
     elif [ "$AI_PROJECT_COUNT" -eq 1 ]; then
         AZURE_AI_PROJECT_NAME="${AI_PROJECTS[0]}"
         
@@ -431,15 +459,17 @@ APPINSIGHTS_RESOURCES=$(az resource list \
     -o tsv 2>/dev/null || echo "")
 
 if [ -n "$APPINSIGHTS_RESOURCES" ]; then
-    APPINSIGHTS_NAME=$(echo "$APPINSIGHTS_RESOURCES" | head -n 1)
+    APPINSIGHTS_NAME=$(echo "$APPINSIGHTS_RESOURCES" | head -n 1 | tr -d '[:space:]')
     
-    APPINSIGHTS_DATA=$(az resource show \
-        --ids "/subscriptions/$AZURE_SUBSCRIPTION_ID/resourceGroups/$AZURE_RESOURCE_GROUP/providers/Microsoft.Insights/components/$APPINSIGHTS_NAME" \
-        --query "{connectionString: properties.ConnectionString, instrumentationKey: properties.InstrumentationKey}" \
+    # Use az rest with explicit API version to ensure ConnectionString is returned.
+    # az resource show uses older API versions that may not include ConnectionString.
+    APPINSIGHTS_DATA=$(az rest \
+        --method GET \
+        --uri "https://management.azure.com/subscriptions/$AZURE_SUBSCRIPTION_ID/resourceGroups/$AZURE_RESOURCE_GROUP/providers/Microsoft.Insights/components/$APPINSIGHTS_NAME?api-version=2020-02-02" \
         -o json 2>/dev/null || echo "{}")
-    
-    APPINSIGHTS_CONNECTION_STRING=$(echo "$APPINSIGHTS_DATA" | jq -r '.connectionString // ""')
-    APPINSIGHTS_INSTRUMENTATION_KEY=$(echo "$APPINSIGHTS_DATA" | jq -r '.instrumentationKey // ""')
+
+    APPINSIGHTS_CONNECTION_STRING=$(echo "$APPINSIGHTS_DATA" | jq -r '.properties.ConnectionString // ""' 2>/dev/null || echo "")
+    APPINSIGHTS_INSTRUMENTATION_KEY=$(echo "$APPINSIGHTS_DATA" | jq -r '.properties.InstrumentationKey // ""' 2>/dev/null || echo "")
     
     echo -e "${GREEN}✓ Found Application Insights: $APPINSIGHTS_NAME${NC}"
     
@@ -447,10 +477,10 @@ if [ -n "$APPINSIGHTS_RESOURCES" ]; then
         echo -e "  ${BOLD}Connection String:${NC} ${APPINSIGHTS_CONNECTION_STRING:0:50}..."
     fi
 else
-    echo -e "${YELLOW}⚠ No Application Insights found${NC}"
+    echo -e "${YELLOW}⚠ No Application Insights found - preserving any existing values${NC}"
     APPINSIGHTS_NAME=""
-    APPINSIGHTS_CONNECTION_STRING=""
-    APPINSIGHTS_INSTRUMENTATION_KEY=""
+    APPINSIGHTS_CONNECTION_STRING="${APPLICATIONINSIGHTS_CONNECTION_STRING:-}"
+    APPINSIGHTS_INSTRUMENTATION_KEY="${APPLICATIONINSIGHTS_INSTRUMENTATION_KEY:-}"
 fi
 echo ""
 
@@ -465,17 +495,26 @@ ACR_RESOURCES=$(az acr list \
     --query "[].{name:name, loginServer:loginServer}" \
     -o json 2>/dev/null || echo "[]")
 
-ACR_COUNT=$(echo "$ACR_RESOURCES" | jq length)
+ACR_COUNT=$(echo "$ACR_RESOURCES" | jq length 2>/dev/null || echo "0")
 
 if [ "$ACR_COUNT" -gt 0 ]; then
-    ACR_NAME=$(echo "$ACR_RESOURCES" | jq -r '.[0].name')
-    AZURE_CONTAINER_REGISTRY_ENDPOINT=$(echo "$ACR_RESOURCES" | jq -r '.[0].loginServer')
+    ACR_NAME=$(echo "$ACR_RESOURCES" | jq -r '.[0].name' 2>/dev/null || echo "")
+    AZURE_CONTAINER_REGISTRY_ENDPOINT=$(echo "$ACR_RESOURCES" | jq -r '.[0].loginServer' 2>/dev/null || echo "")
     echo -e "${GREEN}✓ Found Container Registry: $ACR_NAME${NC}"
     echo -e "  ${BOLD}Endpoint:${NC} $AZURE_CONTAINER_REGISTRY_ENDPOINT"
 else
-    echo -e "${YELLOW}⚠ No Container Registry found${NC}"
-    ACR_NAME=""
-    AZURE_CONTAINER_REGISTRY_ENDPOINT=""
+    # Fallback: az acr may not be available (extension missing on older CLI).
+    # Use ALL_RESOURCES which was already fetched via az resource list.
+    ACR_NAME=$(echo "$ALL_RESOURCES" | jq -r '[.[] | select(.type | ascii_downcase == "microsoft.containerregistry/registries")] | .[0].name // ""' 2>/dev/null || echo "")
+    if [ -n "$ACR_NAME" ]; then
+        AZURE_CONTAINER_REGISTRY_ENDPOINT="${ACR_NAME}.azurecr.io"
+        echo -e "${GREEN}✓ Found Container Registry (via resource list): $ACR_NAME${NC}"
+        echo -e "  ${BOLD}Endpoint:${NC} $AZURE_CONTAINER_REGISTRY_ENDPOINT"
+    else
+        echo -e "${YELLOW}⚠ No Container Registry found - preserving any existing values${NC}"
+        ACR_NAME=""
+        AZURE_CONTAINER_REGISTRY_ENDPOINT="${AZURE_CONTAINER_REGISTRY_ENDPOINT:-}"
+    fi
 fi
 
 # Container Apps Environment
@@ -494,11 +533,11 @@ if [ -n "$CONTAINERAPP_ENV" ]; then
         --query "[].{name:name, fqdn:properties.configuration.ingress.fqdn}" \
         -o json 2>/dev/null || echo "[]")
     
-    APP_COUNT=$(echo "$CONTAINER_APPS" | jq length)
+    APP_COUNT=$(echo "$CONTAINER_APPS" | jq length 2>/dev/null || echo "0")
     
     if [ "$APP_COUNT" -gt 0 ]; then
-        SERVICE_API_NAME=$(echo "$CONTAINER_APPS" | jq -r '.[0].name')
-        SERVICE_API_FQDN=$(echo "$CONTAINER_APPS" | jq -r '.[0].fqdn // ""')
+        SERVICE_API_NAME=$(echo "$CONTAINER_APPS" | jq -r '.[0].name' 2>/dev/null || echo "")
+        SERVICE_API_FQDN=$(echo "$CONTAINER_APPS" | jq -r '.[0].fqdn // ""' 2>/dev/null || echo "")
         
         if [ -n "$SERVICE_API_FQDN" ]; then
             SERVICE_API_URI="https://$SERVICE_API_FQDN"
@@ -532,16 +571,69 @@ if [ -n "$CONTAINERAPP_ENV" ]; then
             SERVICE_API_IDENTITY_PRINCIPAL_ID=""
         fi
     else
-        SERVICE_API_NAME=""
-        SERVICE_API_URI=""
-        SERVICE_API_IDENTITY_PRINCIPAL_ID=""
+        SERVICE_API_NAME="${SERVICE_API_NAME:-}"
+        SERVICE_API_URI="${SERVICE_API_URI:-}"
+        SERVICE_API_IDENTITY_PRINCIPAL_ID="${SERVICE_API_IDENTITY_PRINCIPAL_ID:-}"
     fi
 else
-    echo -e "${YELLOW}⚠ No Container Apps Environment found${NC}"
-    AZURE_CONTAINER_ENVIRONMENT_NAME=""
-    SERVICE_API_NAME=""
-    SERVICE_API_URI=""
-    SERVICE_API_IDENTITY_PRINCIPAL_ID=""
+    # Fallback: az containerapp may not be available (extension missing on older CLI).
+    # Use ALL_RESOURCES which was already fetched via az resource list.
+    FALLBACK_ENV_NAME=$(echo "$ALL_RESOURCES" | jq -r '[.[] | select(.type | ascii_downcase == "microsoft.app/managedenvironments")] | .[0].name // ""' 2>/dev/null || echo "")
+    if [ -n "$FALLBACK_ENV_NAME" ]; then
+        AZURE_CONTAINER_ENVIRONMENT_NAME="$FALLBACK_ENV_NAME"
+        echo -e "${GREEN}✓ Found Container Apps Environment (via resource list): $AZURE_CONTAINER_ENVIRONMENT_NAME${NC}"
+
+        FALLBACK_APP_NAME=$(echo "$ALL_RESOURCES" | jq -r '[.[] | select(.type | ascii_downcase == "microsoft.app/containerapps")] | .[0].name // ""' 2>/dev/null || echo "")
+        if [ -n "$FALLBACK_APP_NAME" ]; then
+            SERVICE_API_NAME="$FALLBACK_APP_NAME"
+            # Use az rest with explicit API version for full Container App properties
+            CONTAINER_APP_DATA=$(az rest \
+                --method GET \
+                --uri "https://management.azure.com/subscriptions/$AZURE_SUBSCRIPTION_ID/resourceGroups/$AZURE_RESOURCE_GROUP/providers/Microsoft.App/containerApps/$SERVICE_API_NAME?api-version=2023-05-01" \
+                -o json 2>/dev/null || echo "{}")
+            # Try ingress FQDN first, then latestRevisionFqdn as fallback
+            SERVICE_API_FQDN=$(echo "$CONTAINER_APP_DATA" | jq -r '(.properties.configuration.ingress.fqdn // .properties.latestRevisionFqdn // "")' 2>/dev/null || echo "")
+            # Try system-assigned identity first, then user-assigned from the app resource
+            SERVICE_API_IDENTITY_PRINCIPAL_ID=$(echo "$CONTAINER_APP_DATA" | jq -r '.identity.principalId // ""' 2>/dev/null || echo "")
+            if [ -z "$SERVICE_API_IDENTITY_PRINCIPAL_ID" ] || [ "$SERVICE_API_IDENTITY_PRINCIPAL_ID" = "null" ]; then
+                SERVICE_API_IDENTITY_PRINCIPAL_ID=$(echo "$CONTAINER_APP_DATA" | jq -r '(.identity.userAssignedIdentities // {}) | to_entries | .[0].value.principalId // ""' 2>/dev/null || echo "")
+            fi
+            # Final fallback: look up the managed identity resource directly from ALL_RESOURCES
+            if [ -z "$SERVICE_API_IDENTITY_PRINCIPAL_ID" ] || [ "$SERVICE_API_IDENTITY_PRINCIPAL_ID" = "null" ]; then
+                MI_NAME=$(echo "$ALL_RESOURCES" | jq -r '[.[] | select(.type | ascii_downcase == "microsoft.managedidentity/userassignedidentities")] | .[0].name // ""' 2>/dev/null || echo "")
+                if [ -n "$MI_NAME" ]; then
+                    SERVICE_API_IDENTITY_PRINCIPAL_ID=$(az resource show \
+                        --resource-group "$AZURE_RESOURCE_GROUP" \
+                        --resource-type "Microsoft.ManagedIdentity/userAssignedIdentities" \
+                        --name "$MI_NAME" \
+                        --query "properties.principalId" \
+                        -o tsv 2>/dev/null || echo "")
+                fi
+            fi
+            if [ -n "$SERVICE_API_FQDN" ] && [ "$SERVICE_API_FQDN" != "null" ]; then
+                SERVICE_API_URI="https://$SERVICE_API_FQDN"
+                echo -e "  ${BOLD}Container App:${NC} $SERVICE_API_NAME"
+                echo -e "  ${BOLD}URI:${NC} $SERVICE_API_URI"
+            else
+                SERVICE_API_URI="${SERVICE_API_URI:-}"
+            fi
+            if [ -n "$SERVICE_API_IDENTITY_PRINCIPAL_ID" ] && [ "$SERVICE_API_IDENTITY_PRINCIPAL_ID" != "null" ]; then
+                echo -e "  ${BOLD}Identity Principal ID:${NC} $SERVICE_API_IDENTITY_PRINCIPAL_ID"
+            else
+                SERVICE_API_IDENTITY_PRINCIPAL_ID="${SERVICE_API_IDENTITY_PRINCIPAL_ID:-}"
+            fi
+        else
+            SERVICE_API_NAME="${SERVICE_API_NAME:-}"
+            SERVICE_API_URI="${SERVICE_API_URI:-}"
+            SERVICE_API_IDENTITY_PRINCIPAL_ID="${SERVICE_API_IDENTITY_PRINCIPAL_ID:-}"
+        fi
+    else
+        echo -e "${YELLOW}⚠ No Container Apps Environment found - preserving any existing values${NC}"
+        AZURE_CONTAINER_ENVIRONMENT_NAME="${AZURE_CONTAINER_ENVIRONMENT_NAME:-}"
+        SERVICE_API_NAME="${SERVICE_API_NAME:-}"
+        SERVICE_API_URI="${SERVICE_API_URI:-}"
+        SERVICE_API_IDENTITY_PRINCIPAL_ID="${SERVICE_API_IDENTITY_PRINCIPAL_ID:-}"
+    fi
 fi
 echo ""
 
@@ -599,27 +691,23 @@ AZURE_EXISTING_AIPROJECT_RESOURCE_ID="$AZURE_EXISTING_AIPROJECT_RESOURCE_ID"
 
 # .... Azure AI Search (Required for add-product-index script)
 AZURE_SEARCH_ENDPOINT="$AZURE_AI_SEARCH_ENDPOINT"
-AZURE_AISEARCH_ENDPOINT="$AZURE_AI_SEARCH_ENDPOINT"
-AZURE_AI_SEARCH_ENDPOINT="$AZURE_AI_SEARCH_ENDPOINT"
 AZURE_SEARCH_API_KEY="$AZURE_SEARCH_API_KEY"
 AZURE_SEARCH_INDEX_NAME="$AZURE_AI_SEARCH_INDEX_NAME"
-AZURE_AISEARCH_INDEX="$AZURE_AI_SEARCH_INDEX_NAME"
-AZURE_AI_SEARCH_INDEX_NAME="$AZURE_AI_SEARCH_INDEX_NAME"
 
 # .... Agent Configuration
 AZURE_AI_AGENT_DEPLOYMENT_NAME="$AZURE_AI_AGENT_DEPLOYMENT_NAME"
 AZURE_AI_AGENT_MODEL_NAME="$AZURE_AI_AGENT_MODEL_NAME"
 AZURE_AI_AGENT_MODEL_VERSION="$AZURE_AI_AGENT_MODEL_VERSION"
-AZURE_AI_AGENT_DEPLOYMENT_CAPACITY=$AZURE_AI_AGENT_DEPLOYMENT_CAPACITY
+AZURE_AI_AGENT_DEPLOYMENT_CAPACITY="$AZURE_AI_AGENT_DEPLOYMENT_CAPACITY"
 AZURE_AI_AGENT_NAME="$AZURE_AI_AGENT_NAME"
 
 # .... Embedding Model Configuration
 AZURE_AI_EMBED_DEPLOYMENT_NAME="$AZURE_AI_EMBED_DEPLOYMENT_NAME"
 AZURE_AI_EMBED_MODEL_NAME="$AZURE_AI_EMBED_MODEL_NAME"
-AZURE_AI_EMBED_MODEL_VERSION=$AZURE_AI_EMBED_MODEL_VERSION
-AZURE_AI_EMBED_DEPLOYMENT_CAPACITY=$AZURE_AI_EMBED_DEPLOYMENT_CAPACITY
+AZURE_AI_EMBED_MODEL_VERSION="$AZURE_AI_EMBED_MODEL_VERSION"
+AZURE_AI_EMBED_DEPLOYMENT_CAPACITY="$AZURE_AI_EMBED_DEPLOYMENT_CAPACITY"
 AZURE_AI_EMBED_DEPLOYMENT_SKU="$AZURE_AI_EMBED_DEPLOYMENT_SKU"
-AZURE_AI_EMBED_DIMENSIONS=$AZURE_AI_EMBED_DIMENSIONS
+AZURE_AI_EMBED_DIMENSIONS="$AZURE_AI_EMBED_DIMENSIONS"
 AZURE_AI_EMBED_MODEL_FORMAT="$AZURE_AI_EMBED_MODEL_FORMAT"
 
 # .... Container Apps & Registry
@@ -627,7 +715,7 @@ AZURE_CONTAINER_ENVIRONMENT_NAME="$AZURE_CONTAINER_ENVIRONMENT_NAME"
 AZURE_CONTAINER_REGISTRY_ENDPOINT="$AZURE_CONTAINER_REGISTRY_ENDPOINT"
 SERVICE_API_NAME="$SERVICE_API_NAME"
 SERVICE_API_URI="$SERVICE_API_URI"
-SERVICE_API_ENDPOINTS='$SERVICE_API_ENDPOINTS'
+SERVICE_API_ENDPOINTS="$SERVICE_API_ENDPOINTS"
 SERVICE_API_IDENTITY_PRINCIPAL_ID="$SERVICE_API_IDENTITY_PRINCIPAL_ID"
 SERVICE_API_AND_FRONTEND_IMAGE_NAME="$SERVICE_API_AND_FRONTEND_IMAGE_NAME"
 
